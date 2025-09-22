@@ -76,7 +76,11 @@ scheduler.start()
 # ----------------
 @app.get("/")
 def home():
-    return {"message": "Thai 2D Stock Snapshot API is running. Use /records or /latest endpoints."}
+    result = {
+        "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
+        "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
+    }
+    return result
 
 @app.get("/latest")
 def latest_day_snapshot():
