@@ -39,7 +39,7 @@ myanmar_tz = pytz.timezone("Asia/Yangon")
 # Target API
 TARGET_API = "https://api.thaistock2d.com/live"
 
-# Function: Fetch & record snapshot (with placeholders if API unavailable)
+# Function: Fetch & record snapshot
 def fetch_snapshot():
     try:
         response = requests.get(TARGET_API, timeout=5)
@@ -74,13 +74,21 @@ scheduler.add_job(fetch_snapshot, 'cron', hour=12, minute=1)
 scheduler.add_job(fetch_snapshot, 'cron', hour=16, minute=30)
 scheduler.start()
 
-# API endpoint: Get all records
+# -------------------
+# Routes
+# -------------------
+
+# Root route → simple message
+@app.get("/")
+def home():
+    return {"message": "Thai 2D Stock Snapshot API is running. Use /records or /latest endpoints."}
+
+# Get all records
 @app.get("/records")
 def get_records():
     cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id")
     rows = cursor.fetchall()
     if not rows:
-        # DB empty → return placeholder
         now = datetime.now(myanmar_tz)
         return [{"date": now.date().isoformat(),
                  "time": now.time().strftime("%H:%M:%S"),
@@ -92,7 +100,7 @@ def get_records():
         for r in rows
     ]
 
-# API endpoint: Get latest record
+# Get latest record
 @app.get("/latest")
 def latest_record():
     cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id DESC LIMIT 1")
