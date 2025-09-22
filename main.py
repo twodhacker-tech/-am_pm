@@ -90,11 +90,13 @@ def get_records():
     rows = cursor.fetchall()
     if not rows:
         now = datetime.now(myanmar_tz)
-        return [{"date": now.date().isoformat(),
-                 "time": now.time().strftime("%H:%M:%S"),
-                 "set": "--",
-                 "value": "--",
-                 "twod": "--"}]
+        return [{
+            "date": now.date().isoformat(),
+            "time": now.time().strftime("%H:%M:%S"),
+            "set": "--",
+            "value": "--",
+            "twod": "--"
+        }]
     return [
         {"date": r[0], "time": r[1], "set": r[2], "value": r[3], "twod": r[4]}
         for r in rows
