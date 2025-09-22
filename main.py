@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # FastAPI app
 app = FastAPI()
 
-# Enable CORS (Android/Web client)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,35 +39,34 @@ myanmar_tz = pytz.timezone("Asia/Yangon")
 # Target API
 TARGET_API = "https://api.thaistock2d.com/live"
 
-# Function: Fetch & record snapshot
+# Function: Fetch & record snapshot (with placeholders if API unavailable)
 def fetch_snapshot():
     try:
-        response = requests.get(TARGET_API)
+        response = requests.get(TARGET_API, timeout=5)
         result = response.json()
         live = result.get("live", {})
         
-        # Extract fields
         set_value = live.get("set", "--")
         value = live.get("value", "--")
         twod = live.get("twod", "--")
         time_str = live.get("time", "--")
         date_str = live.get("date", datetime.now(myanmar_tz).strftime("%Y-%m-%d"))
         
-        now = datetime.now(myanmar_tz)
-        record_date = date_str
-        record_time = time_str if time_str != "--" else now.time().strftime("%H:%M:%S")
-        
-        # Insert into DB
-        cursor.execute("""
-            INSERT INTO records (record_date, record_time, set_value, value, twod)
-            VALUES (?, ?, ?, ?, ?)
-        """, (record_date, record_time, set_value, value, twod))
-        conn.commit()
-        
-        print(f"Recorded 2D data at {record_time} on {record_date}")
-        
     except Exception as e:
+        # API failed → insert placeholder
         print(f"Error fetching snapshot: {e}")
+        set_value = value = twod = "--"
+        now = datetime.now(myanmar_tz)
+        time_str = now.time().strftime("%H:%M:%S")
+        date_str = now.date().isoformat()
+    
+    # Insert snapshot (real or placeholder)
+    cursor.execute("""
+        INSERT INTO records (record_date, record_time, set_value, value, twod)
+        VALUES (?, ?, ?, ?, ?)
+    """, (date_str, time_str, set_value, value, twod))
+    conn.commit()
+    print(f"Recorded snapshot at {time_str} on {date_str}")
 
 # Scheduler setup
 scheduler = BackgroundScheduler(timezone=myanmar_tz)
@@ -80,14 +79,17 @@ scheduler.start()
 def get_records():
     cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id")
     rows = cursor.fetchall()
+    if not rows:
+        # DB empty → return placeholder
+        now = datetime.now(myanmar_tz)
+        return [{"date": now.date().isoformat(),
+                 "time": now.time().strftime("%H:%M:%S"),
+                 "set": "--",
+                 "value": "--",
+                 "twod": "--"}]
     return [
-        {
-            "date": r[0],
-            "time": r[1],
-            "set": r[2],
-            "value": r[3],
-            "twod": r[4]
-        } for r in rows
+        {"date": r[0], "time": r[1], "set": r[2], "value": r[3], "twod": r[4]}
+        for r in rows
     ]
 
 # API endpoint: Get latest record
@@ -96,11 +98,13 @@ def latest_record():
     cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id DESC LIMIT 1")
     r = cursor.fetchone()
     if r:
-        return {
-            "date": r[0],
-            "time": r[1],
-            "set": r[2],
-            "value": r[3],
-            "twod": r[4]
-        }
-    return {"message": "No records yet"}
+        return {"date": r[0], "time": r[1], "set": r[2], "value": r[3], "twod": r[4]}
+    # DB empty → placeholder
+    now = datetime.now(myanmar_tz)
+    return {
+        "date": now.date().isoformat(),
+        "time": now.time().strftime("%H:%M:%S"),
+        "set": "--",
+        "value": "--",
+        "twod": "--"
+    }
