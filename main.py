@@ -44,48 +44,56 @@ conn.commit()
 tz = pytz.timezone("Asia/Yangon")
 
 # -----------------------
-# Fetch & record snapshot
+# Function to scrape SET website
 # -----------------------
-def fetch_snapshot(period):
-    fetched_at = int(time.time())
+def scrape_set_live():
     url = "https://www.set.or.th/en/market/product/stock/overview"
-
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except Exception as e:
-        # Request failed → insert placeholder
-        set_value = value = twod = "--"
-    else:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        try:
-            tables = soup.find_all("table")
-            table = tables[1]  # second table
-            divs = table.find_all("div")
-            live_set = divs[4].get_text(strip=True)
-            live_value = divs[6].get_text(strip=True)
+        return {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--", "error": f"request_error: {e}"}
+    
+    soup = BeautifulSoup(resp.text, "html.parser")
+    try:
+        tables = soup.find_all("table")
+        table = tables[1]
+        divs = table.find_all("div")
+        live_set = divs[4].get_text(strip=True)
+        live_value = divs[6].get_text(strip=True)
 
-            clean_set = live_set.replace(",", "")
-            formatted = "{:.2f}".format(float(clean_set))
-            top = formatted[-1]
+        clean_set = live_set.replace(",", "")
+        formatted = "{:.2f}".format(float(clean_set))
+        top = formatted[-1]
 
-            clean_value = live_value.replace(",", "") or "0.00"
-            last = str(int(float(clean_value)))[-1]
+        clean_value = live_value.replace(",", "") or "0.00"
+        last = str(int(float(clean_value)))[-1]
 
-            twod_live = f"{top}{last}"
+        twod_live = f"{top}{last}"
+        now = datetime.now(tz)
+        return {
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "set": live_set,
+            "value": live_value,
+            "twod": twod_live
+        }
+    except Exception as e:
+        return {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--", "error": f"parse_error: {e}"}
 
-            set_value = live_set
-            value = live_value
-            twod = twod_live
-        except Exception as e:
-            # Parsing failed → placeholder
-            set_value = value = twod = "--"
+# -----------------------
+# Fetch & record snapshot
+# -----------------------
+def fetch_snapshot(period):
+    data = scrape_set_live()
+    set_value = data.get("set", "--")
+    value = data.get("value", "--")
+    twod = data.get("twod", "--")
 
     now = datetime.now(tz)
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M:%S")
 
-    # Insert into DB
     cursor.execute("""
         INSERT INTO records (record_date, record_time, set_value, value, twod, period)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -106,7 +114,9 @@ scheduler.start()
 # -----------------------
 @app.get("/")
 def home():
+    live_data = scrape_set_live()
     result = {
+        "live": live_data,
         "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
         "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
     }
@@ -122,12 +132,13 @@ def latest_day_snapshot():
     """, (today,))
     rows = cursor.fetchall()
 
-    # Initialize AM/PM with placeholder
+    # Initialize only AM/PM placeholders
     result = {
         "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
         "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
     }
 
+    # Update AM/PM if records exist
     for r in rows:
         period = r[0]
         result[period] = {
@@ -137,5 +148,8 @@ def latest_day_snapshot():
             "value": r[4],
             "twod": r[5]
         }
+
+    # Add live scrape data at the end (no initial placeholder needed)
+    result["live"] = scrape_set_live()
 
     return result
