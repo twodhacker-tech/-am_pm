@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 import requests
 from bs4 import BeautifulSoup
@@ -105,7 +105,9 @@ def fetch_snapshot(period):
 # Scheduler
 # -----------------------
 scheduler = BackgroundScheduler(timezone=tz)
+# AM snapshot
 scheduler.add_job(lambda: fetch_snapshot("AM"), 'cron', hour=12, minute=1)
+# PM snapshot
 scheduler.add_job(lambda: fetch_snapshot("PM"), 'cron', hour=16, minute=30)
 scheduler.start()
 
@@ -124,21 +126,21 @@ def home():
 
 @app.get("/latest")
 def latest_day_snapshot():
-    today = datetime.now(tz).strftime("%Y-%m-%d")
+    today_str = datetime.now(tz).strftime("%Y-%m-%d")
     cursor.execute("""
         SELECT period, record_date, record_time, set_value, value, twod
         FROM records
         WHERE record_date = ?
-    """, (today,))
+    """, (today_str,))
     rows = cursor.fetchall()
 
-    # Initialize only AM/PM placeholders
+    # Initialize AM/PM placeholders
     result = {
         "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
         "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
     }
 
-    # Update AM/PM if records exist
+    # Update AM/PM if DB records exist
     for r in rows:
         period = r[0]
         result[period] = {
@@ -149,7 +151,7 @@ def latest_day_snapshot():
             "twod": r[5]
         }
 
-    # Add live scrape data at the end (no initial placeholder needed)
+    # Live scrape
     result["live"] = scrape_set_live()
 
     return result
