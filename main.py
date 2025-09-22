@@ -1,14 +1,17 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, date
+from datetime import datetime
 import pytz
 import requests
+from bs4 import BeautifulSoup
 import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
+import time
 
+# -----------------------
+# FastAPI app & CORS
+# -----------------------
 app = FastAPI()
-
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,7 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------
 # SQLite DB
+# -----------------------
 conn = sqlite3.connect("stock2d.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
@@ -33,29 +38,52 @@ CREATE TABLE IF NOT EXISTS records (
 """)
 conn.commit()
 
-# Myanmar timezone
+# -----------------------
+# Timezone
+# -----------------------
 tz = pytz.timezone("Asia/Yangon")
 
-# Target API
-TARGET_API = "https://api.thaistock2d.com/live"
-
-# Scheduler fetch
+# -----------------------
+# Fetch & record snapshot
+# -----------------------
 def fetch_snapshot(period):
+    fetched_at = int(time.time())
+    url = "https://www.set.or.th/en/market/product/stock/overview"
+
     try:
-        response = requests.get(TARGET_API, timeout=5)
-        result = response.json()
-        live = result.get("live", {})
-        set_value = live.get("set", "--")
-        value = live.get("value", "--")
-        twod = live.get("twod", "--")
-        time_str = live.get("time", "--")
-        date_str = live.get("date", datetime.now(tz).strftime("%Y-%m-%d"))
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
     except Exception as e:
-        print(f"Error fetching snapshot: {e}")
+        # Request failed → insert placeholder
         set_value = value = twod = "--"
-        now = datetime.now(tz)
-        date_str = now.strftime("%Y-%m-%d")
-        time_str = now.strftime("%H:%M:%S")
+    else:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        try:
+            tables = soup.find_all("table")
+            table = tables[1]  # second table
+            divs = table.find_all("div")
+            live_set = divs[4].get_text(strip=True)
+            live_value = divs[6].get_text(strip=True)
+
+            clean_set = live_set.replace(",", "")
+            formatted = "{:.2f}".format(float(clean_set))
+            top = formatted[-1]
+
+            clean_value = live_value.replace(",", "") or "0.00"
+            last = str(int(float(clean_value)))[-1]
+
+            twod_live = f"{top}{last}"
+
+            set_value = live_set
+            value = live_value
+            twod = twod_live
+        except Exception as e:
+            # Parsing failed → placeholder
+            set_value = value = twod = "--"
+
+    now = datetime.now(tz)
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M:%S")
 
     # Insert into DB
     cursor.execute("""
@@ -63,17 +91,19 @@ def fetch_snapshot(period):
         VALUES (?, ?, ?, ?, ?, ?)
     """, (date_str, time_str, set_value, value, twod, period))
     conn.commit()
-    print(f"Recorded {period} snapshot at {time_str} on {date_str}")
+    print(f"Recorded {period} snapshot: twod={twod}, set={set_value}, value={value}")
 
+# -----------------------
 # Scheduler
+# -----------------------
 scheduler = BackgroundScheduler(timezone=tz)
 scheduler.add_job(lambda: fetch_snapshot("AM"), 'cron', hour=12, minute=1)
 scheduler.add_job(lambda: fetch_snapshot("PM"), 'cron', hour=16, minute=30)
 scheduler.start()
 
-# ----------------
+# -----------------------
 # Routes
-# ----------------
+# -----------------------
 @app.get("/")
 def home():
     result = {
