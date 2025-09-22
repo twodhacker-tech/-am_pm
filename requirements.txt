@@ -1,5 +1,6 @@
 fastapi
-uvicorn[standard]
-requests
+uvicorn
 apscheduler
+requests
+beautifulsoup4
 pytz
