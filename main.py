@@ -1,15 +1,14 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 import requests
 import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
 
-# FastAPI app
 app = FastAPI()
 
-# Enable CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# SQLite DB setup
+# SQLite DB
 conn = sqlite3.connect("stock2d.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
@@ -28,93 +27,81 @@ CREATE TABLE IF NOT EXISTS records (
     record_time TEXT,
     set_value TEXT,
     value TEXT,
-    twod TEXT
+    twod TEXT,
+    period TEXT
 )
 """)
 conn.commit()
 
 # Myanmar timezone
-myanmar_tz = pytz.timezone("Asia/Yangon")
+tz = pytz.timezone("Asia/Yangon")
 
 # Target API
 TARGET_API = "https://api.thaistock2d.com/live"
 
-# Function: Fetch & record snapshot
-def fetch_snapshot():
+# Scheduler fetch
+def fetch_snapshot(period):
     try:
         response = requests.get(TARGET_API, timeout=5)
         result = response.json()
         live = result.get("live", {})
-        
         set_value = live.get("set", "--")
         value = live.get("value", "--")
         twod = live.get("twod", "--")
         time_str = live.get("time", "--")
-        date_str = live.get("date", datetime.now(myanmar_tz).strftime("%Y-%m-%d"))
-        
+        date_str = live.get("date", datetime.now(tz).strftime("%Y-%m-%d"))
     except Exception as e:
-        # API failed → insert placeholder
         print(f"Error fetching snapshot: {e}")
         set_value = value = twod = "--"
-        now = datetime.now(myanmar_tz)
-        time_str = now.time().strftime("%H:%M:%S")
-        date_str = now.date().isoformat()
-    
-    # Insert snapshot (real or placeholder)
-    cursor.execute("""
-        INSERT INTO records (record_date, record_time, set_value, value, twod)
-        VALUES (?, ?, ?, ?, ?)
-    """, (date_str, time_str, set_value, value, twod))
-    conn.commit()
-    print(f"Recorded snapshot at {time_str} on {date_str}")
+        now = datetime.now(tz)
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
 
-# Scheduler setup
-scheduler = BackgroundScheduler(timezone=myanmar_tz)
-scheduler.add_job(fetch_snapshot, 'cron', hour=12, minute=1)
-scheduler.add_job(fetch_snapshot, 'cron', hour=16, minute=30)
+    # Insert into DB
+    cursor.execute("""
+        INSERT INTO records (record_date, record_time, set_value, value, twod, period)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (date_str, time_str, set_value, value, twod, period))
+    conn.commit()
+    print(f"Recorded {period} snapshot at {time_str} on {date_str}")
+
+# Scheduler
+scheduler = BackgroundScheduler(timezone=tz)
+scheduler.add_job(lambda: fetch_snapshot("AM"), 'cron', hour=12, minute=1)
+scheduler.add_job(lambda: fetch_snapshot("PM"), 'cron', hour=16, minute=30)
 scheduler.start()
 
-# -------------------
+# ----------------
 # Routes
-# -------------------
-
-# Root route → simple message
+# ----------------
 @app.get("/")
 def home():
     return {"message": "Thai 2D Stock Snapshot API is running. Use /records or /latest endpoints."}
 
-# Get all records
-@app.get("/records")
-def get_records():
-    cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id")
-    rows = cursor.fetchall()
-    if not rows:
-        now = datetime.now(myanmar_tz)
-        return [{
-            "date": now.date().isoformat(),
-            "time": now.time().strftime("%H:%M:%S"),
-            "set": "--",
-            "value": "--",
-            "twod": "--"
-        }]
-    return [
-        {"date": r[0], "time": r[1], "set": r[2], "value": r[3], "twod": r[4]}
-        for r in rows
-    ]
-
-# Get latest record
 @app.get("/latest")
-def latest_record():
-    cursor.execute("SELECT record_date, record_time, set_value, value, twod FROM records ORDER BY id DESC LIMIT 1")
-    r = cursor.fetchone()
-    if r:
-        return {"date": r[0], "time": r[1], "set": r[2], "value": r[3], "twod": r[4]}
-    # DB empty → placeholder
-    now = datetime.now(myanmar_tz)
-    return {
-        "date": now.date().isoformat(),
-        "time": now.time().strftime("%H:%M:%S"),
-        "set": "--",
-        "value": "--",
-        "twod": "--"
+def latest_day_snapshot():
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    cursor.execute("""
+        SELECT period, record_date, record_time, set_value, value, twod
+        FROM records
+        WHERE record_date = ?
+    """, (today,))
+    rows = cursor.fetchall()
+
+    # Initialize AM/PM with placeholder
+    result = {
+        "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
+        "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
     }
+
+    for r in rows:
+        period = r[0]
+        result[period] = {
+            "date": r[1],
+            "time": r[2],
+            "set": r[3],
+            "value": r[4],
+            "twod": r[5]
+        }
+
+    return result
