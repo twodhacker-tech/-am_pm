@@ -1,51 +1,37 @@
-# main.py
-from fastapi import FastAPI
-from bs4 import BeautifulSoup
-import requests
-import datetime
-import time
-import threading
 import json
 import os
+import time as t
+from datetime import datetime, time
+from threading import Thread
+from fastapi import FastAPI
+import requests
+from bs4 import BeautifulSoup
 import pytz
 
 app = FastAPI()
-
-# ------------------------
-# Config / Timezone
-# ------------------------
 TIMEZONE = pytz.timezone("Asia/Yangon")
 DATA_FILE = "ResultsHistory.json"
 
-# Placeholder used for "--"
-PLACEHOLDER = {
-    "date": "--",
-    "time": "--",
-    "set": "--",
-    "value": "--",
-    "twod": "--"
-}
-
-# runtime state
+# -------------------------
+# Placeholders
+# -------------------------
+PLACEHOLDER = {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
 current_am = PLACEHOLDER.copy()
 current_pm = PLACEHOLDER.copy()
 history = []
 
-# flags
 last_am_saved_date = None
 last_pm_saved_date = None
 last_reset_date = None
 
-
-# ------------------------
+# -------------------------
 # Helpers
-# ------------------------
-def time_from_hms(hms: str) -> datetime.time:
+# -------------------------
+def time_from_hms(hms: str) -> time:
     h, m, s = map(int, hms.split(":"))
-    return datetime.time(h, m, s)
+    return time(h, m, s)
 
-def in_range(start_hms: str, end_hms: str, now_time: datetime.time) -> bool:
-    """Return True if now_time is in [start, end)."""
+def in_range(start_hms: str, end_hms: str, now_time: time) -> bool:
     start = time_from_hms(start_hms)
     end = time_from_hms(end_hms)
     return start <= now_time < end
@@ -53,23 +39,23 @@ def in_range(start_hms: str, end_hms: str, now_time: datetime.time) -> bool:
 def load_history():
     global history, last_am_saved_date, last_pm_saved_date
     if not os.path.exists(DATA_FILE):
-        history = []
+        history.clear()
         return
     try:
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
-            history = data.get("history", [])
-            # last AM/PM dates
+            history[:] = data.get("history", [])
+            # last saved
             for rec in reversed(history):
-                if rec.get("session") == "AM":
+                if rec.get("session") == "AM" and rec.get("date"):
                     last_am_saved_date = rec.get("date")
                     break
             for rec in reversed(history):
-                if rec.get("session") == "PM":
+                if rec.get("session") == "PM" and rec.get("date"):
                     last_pm_saved_date = rec.get("date")
                     break
-    except Exception:
-        history = []
+    except:
+        history.clear()
 
 def save_history():
     try:
@@ -78,23 +64,20 @@ def save_history():
     except Exception as e:
         print("Error saving history:", e)
 
-
-# ------------------------
-# Live fetch function
-# ------------------------
+# -------------------------
+# Fetch Live
+# -------------------------
 def get_live():
     try:
         url = "https://www.set.or.th/en/market/product/stock/overview"
         response = requests.get(url, timeout=8)
         soup = BeautifulSoup(response.text, "html.parser")
-
         table = soup.find_all("table")[1]
         set_index = table.find_all("div")[4]
         value_index = table.find_all("div")[6]
 
         live_set = set_index.get_text(strip=True)
         live_value = value_index.get_text(strip=True)
-
         clean_set = live_set.replace(",", "")
         formatted = "{:.2f}".format(float(clean_set))
         top = formatted[-1]
@@ -105,115 +88,82 @@ def get_live():
         last = str(int(float(clean_value)))[-1]
 
         twod_live = f"{top}{last}"
+        now_dt = datetime.now(TIMEZONE)
+        return {"date": now_dt.strftime("%Y-%m-%d"),
+                "time": now_dt.strftime("%H:%M:%S"),
+                "set": live_set,
+                "value": live_value,
+                "twod": twod_live}
+    except:
+        now_dt = datetime.now(TIMEZONE)
+        return {"date": "--", "time": now_dt.strftime("%H:%M:%S"),
+                "set": "--", "value": "--", "twod": "--"}
 
-        now_dt = datetime.datetime.now(TIMEZONE)
-        return {
-            "date": now_dt.strftime("%Y-%m-%d"),
-            "time": now_dt.strftime("%H:%M:%S"),
-            "set": live_set,
-            "value": live_value,
-            "twod": twod_live
-        }
-    except Exception:
-        now_dt = datetime.datetime.now(TIMEZONE)
-        return {
-            "date": "--",
-            "time": now_dt.strftime("%H:%M:%S"),
-            "set": "--",
-            "value": "--",
-            "twod": "--"
-        }
-
-
-# ------------------------
-# Background runner
-# ------------------------
-def live_runner():
+# -------------------------
+# Background Runner
+# -------------------------
+def runner():
     global current_am, current_pm, history
     global last_am_saved_date, last_pm_saved_date, last_reset_date
 
     load_history()
-
     while True:
-        now_dt = datetime.datetime.now(TIMEZONE)
+        now_dt = datetime.now(TIMEZONE)
         now_time = now_dt.time()
         today_str = now_dt.date().isoformat()
 
-        # Reset at 08:50
+        # 08:50 reset placeholders once/day
         if in_range("08:50:00", "09:00:00", now_time):
             if last_reset_date != today_str:
                 current_am = PLACEHOLDER.copy()
                 current_pm = PLACEHOLDER.copy()
                 last_reset_date = today_str
-                print(f"[{now_dt.strftime('%H:%M:%S')}] Reset placeholders at 08:50")
+                print(f"[{now_dt.strftime('%H:%M:%S')}] Reset placeholders")
 
-        # AM run 09:00 - 12:01
+        # AM run 09:00-12:01
         if in_range("09:00:00", "12:01:00", now_time):
             current_am = get_live()
             current_pm = PLACEHOLDER.copy()
 
-        # AM Save at 12:01+
-        if now_time >= time_from_hms("12:01:00"):
-            if last_am_saved_date != today_str:
-                if current_am.get("date") != "--":
-                    history.append({"session": "AM", **current_am})
-                    save_history()
-                    last_am_saved_date = today_str
-                    print(f"[{now_dt.strftime('%H:%M:%S')}] AM saved")
+        # Save AM after 12:01 once
+        if now_time >= time_from_hms("12:01:00") and last_am_saved_date != today_str:
+            if current_am.get("date") != "--":
+                history.append({"session": "AM", **current_am})
+                save_history()
+                last_am_saved_date = today_str
+                print(f"[{now_dt.strftime('%H:%M:%S')}] AM saved")
 
-        # PM run 13:00 - 16:30
+        # PM run 13:00-16:30
         if in_range("13:00:00", "16:30:01", now_time):
             current_pm = get_live()
 
-        # PM Save at 16:30+
-        if now_time >= time_from_hms("16:30:00"):
-            if last_pm_saved_date != today_str:
-                if current_pm.get("date") != "--":
-                    history.append({"session": "PM", **current_pm})
-                    save_history()
-                    last_pm_saved_date = today_str
-                    print(f"[{now_dt.strftime('%H:%M:%S')}] PM saved")
+        # Save PM after 16:30 once
+        if now_time >= time_from_hms("16:30:00") and last_pm_saved_date != today_str:
+            if current_pm.get("date") != "--":
+                history.append({"session": "PM", **current_pm})
+                save_history()
+                last_pm_saved_date = today_str
+                print(f"[{now_dt.strftime('%H:%M:%S')}] PM saved")
 
-        time.sleep(1)
+        t.sleep(1)
 
+Thread(target=runner, daemon=True).start()
 
-thread = threading.Thread(target=live_runner, daemon=True)
-thread.start()
-
-
-# ------------------------
-# FastAPI endpoints
-# ------------------------
+# -------------------------
+# FastAPI Endpoints
+# -------------------------
 @app.get("/")
 def root():
-    now = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    return {"message": "FastAPI Live Scheduler Running", "time": now}
-
+    return {"message": "FastAPI Live Scheduler Running",
+            "time": datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}
 
 @app.get("/data")
 def get_data():
-    now_dt = datetime.datetime.now(TIMEZONE)
-    now_time = now_dt.time()
+    now_time = datetime.now(TIMEZONE).time()
 
-    # Before reset (08:50) -> keep yesterday data
-    if now_time < time_from_hms("08:50:00"):
-        return {"AM": current_am, "PM": current_pm, "history": history}
-
-    # 08:50 - 09:00 -> placeholders
+    # Before 08:50 -> show last saved
+    data = {"AM": current_am, "PM": current_pm, "history": history}
     if in_range("08:50:00", "09:00:00", now_time):
-        return {"AM": PLACEHOLDER.copy(), "PM": PLACEHOLDER.copy(), "history": history}
-
-    # 09:00 - 12:01 -> AM live, PM "--"
-    if in_range("09:00:00", "12:01:00", now_time):
-        return {"AM": current_am, "PM": PLACEHOLDER.copy(), "history": history}
-
-    # 12:01 - 13:00 -> AM frozen, PM "--"
-    if in_range("12:01:00", "13:00:00", now_time):
-        return {"AM": current_am, "PM": PLACEHOLDER.copy(), "history": history}
-
-    # 13:00 - 16:30 -> PM live, AM frozen
-    if in_range("13:00:00", "16:30:01", now_time):
-        return {"AM": current_am, "PM": current_pm, "history": history}
-
-    # After 16:30 until next reset
-    return {"AM": current_am, "PM": current_pm, "history": history}
+        data["AM"] = PLACEHOLDER.copy()
+        data["PM"] = PLACEHOLDER.copy()
+    return data
