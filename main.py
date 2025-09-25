@@ -1,10 +1,10 @@
 from fastapi import FastAPI
-from apscheduler.schedulers.background import BackgroundScheduler
 import datetime
 import pytz
 import time
-import os
+import threading
 import json
+import os
 import requests
 from bs4 import BeautifulSoup
 
@@ -23,7 +23,7 @@ last_am = None
 last_pm = None
 
 # ------------------------
-# Utility functions
+# Utility Functions
 # ------------------------
 def get_live():
     url = "https://www.set.or.th/en/market/product/stock/overview"
@@ -59,7 +59,7 @@ def get_live():
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"live": {}, "AM": {}, "PM": {}, "history": []}
+        return {"AM": {}, "PM": {}, "history": []}
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
@@ -68,31 +68,17 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# ------------------------
-# Scheduler Jobs
-# ------------------------
-def job_live():
-    global last_am, last_pm
-    now = datetime.datetime.now(TIMEZONE)
-    current_time = now.strftime("%H:%M:%S")
 
-    live = get_live()
+# ------------------------
+# AM / PM Save Functions
+# ------------------------
+def save_am_live(live):
+    global last_am
+    last_am = live
     data = load_data()
-    data["live"] = live
+    data["AM"] = live
     save_data(data)
-
-    # AM Section
-    if "09:00:00" <= current_time <= "12:01:00":
-        last_am = live
-        print(f"[AM RUN] {live['time']} -> {live['twod']}")
-
-    # PM Section
-    elif "12:30:00" <= current_time <= "16:30:00":
-        last_pm = live
-        print(f"[PM RUN] {live['time']} -> {live['twod']}")
-
-    else:
-        print(f"[WAIT] {current_time}")
+    print(f"[AM RUN] {live['time']} -> {live['twod']}")
 
 
 def close_am():
@@ -102,8 +88,17 @@ def close_am():
         data["AM"] = last_am
         data["history"].append({"session": "AM", **last_am})
         save_data(data)
-        print(f"[AM CLOSED] saved at 12:01 -> {last_am}")
+        print(f"[AM CLOSED] {last_am['time']}")
         last_am = None
+
+
+def save_pm_live(live):
+    global last_pm
+    last_pm = live
+    data = load_data()
+    data["PM"] = live
+    save_data(data)
+    print(f"[PM RUN] {live['time']} -> {live['twod']}")
 
 
 def close_pm():
@@ -113,28 +108,52 @@ def close_pm():
         data["PM"] = last_pm
         data["history"].append({"session": "PM", **last_pm})
         save_data(data)
-        print(f"[PM CLOSED] saved at 16:30 -> {last_pm}")
+        print(f"[PM CLOSED] {last_pm['time']}")
         last_pm = None
+
+
+# ------------------------
+# Continuous Live Runner
+# ------------------------
+def run_live_continuous():
+    while True:
+        now = datetime.datetime.now(TIMEZONE)
+        current_time = now.strftime("%H:%M:%S")
+
+        # AM session
+        if "09:00:00" <= current_time <= "12:01:00":
+            live = get_live()
+            save_am_live(live)
+            if current_time == "12:01:00":
+                close_am()
+
+        # PM session
+        elif "13:00:00" <= current_time <= "16:30:00":
+            live = get_live()
+            save_pm_live(live)
+            if current_time == "16:30:00":
+                close_pm()
+
+        time.sleep(0.1)  # Continuous but CPU-friendly
+
 
 # ------------------------
 # FastAPI Startup Event
 # ------------------------
-scheduler = BackgroundScheduler(timezone=TIMEZONE)
-
 @app.on_event("startup")
-def start_scheduler():
-    scheduler.add_job(job_live, "interval", seconds=4)  # run every 4 sec
-    scheduler.add_job(close_am, "cron", hour=12, minute=1, second=0)
-    scheduler.add_job(close_pm, "cron", hour=16, minute=30, second=0)
-    scheduler.start()
-    print("Scheduler started...")
+def start_background_task():
+    thread = threading.Thread(target=run_live_continuous, daemon=True)
+    thread.start()
+    print("Continuous Live Runner Started...")
+
 
 # ------------------------
 # API Endpoints
 # ------------------------
 @app.get("/")
 def home():
-    return {"message": "FastAPI Scheduler Running", "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    return {"message": "FastAPI Live Scheduler Running", "time": datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}
+
 
 @app.get("/data")
 def get_data():
