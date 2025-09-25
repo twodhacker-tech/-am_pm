@@ -1,157 +1,83 @@
-from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, date
+import datetime
 import pytz
-import requests
-from bs4 import BeautifulSoup
-import sqlite3
-from fastapi.middleware.cors import CORSMiddleware
 import time
 
-# -----------------------
-# FastAPI app & CORS
-# -----------------------
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+TIMEZONE = pytz.timezone("Asia/Yangon")
+scheduler = BackgroundScheduler(timezone=TIMEZONE)
 
-# -----------------------
-# SQLite DB
-# -----------------------
-conn = sqlite3.connect("stock2d.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    record_date TEXT,
-    record_time TEXT,
-    set_value TEXT,
-    value TEXT,
-    twod TEXT,
-    period TEXT
-)
-""")
-conn.commit()
+last_am = None
+last_pm = None
 
-# -----------------------
-# Timezone
-# -----------------------
-tz = pytz.timezone("Asia/Yangon")
 
-# -----------------------
-# Function to scrape SET website
-# -----------------------
-def scrape_set_live():
-    url = "https://www.set.or.th/en/market/product/stock/overview"
+def job_live():
+    """4 စက္ကန့် တစ်ကြိမ် run, section အလိုက် သတ်မှတ်ချိန်မှာပဲ update"""
+    global last_am, last_pm
+    now = datetime.datetime.now(TIMEZONE)
+    current_time = now.strftime("%H:%M:%S")
+
+    # Live data ယူ
+    live = get_live()
+    data = load_data()
+    data["live"] = live
+    save_data(data)
+
+    # AM Section
+    if "09:00:00" <= current_time <= "12:01:00":
+        last_am = live
+        print(f"[AM RUN] {live['time']} -> {live['twod']}")
+
+    # PM Section
+    elif "12:30:00" <= current_time <= "16:30:00":
+        last_pm = live
+        print(f"[PM RUN] {live['time']} -> {live['twod']}")
+    else:
+        # အချိန်မကျသေးရင် run မလုပ်ပါ
+        print(f"[WAIT] {current_time}")
+
+
+def close_am():
+    """12:01 မှာ AM နောက်ဆုံး data သိမ်း"""
+    global last_am
+    if last_am:
+        data = load_data()
+        data["AM"] = last_am
+        data["history"].append({"session": "AM", **last_am})
+        save_data(data)
+        print(f"[AM CLOSED] saved at 12:01 -> {last_am}")
+        last_am = None
+
+
+def close_pm():
+    """16:30 မှာ PM နောက်ဆုံး data သိမ်း"""
+    global last_pm
+    if last_pm:
+        data = load_data()
+        data["PM"] = last_pm
+        data["history"].append({"session": "PM", **last_pm})
+        save_data(data)
+        print(f"[PM CLOSED] saved at 16:30 -> {last_pm}")
+        last_pm = None
+
+
+def start_scheduler():
+    # 4 စက္ကန့် တစ်ကြိမ် run
+    scheduler.add_job(job_live, "interval", seconds=4, id="live_job")
+
+    # AM close
+    scheduler.add_job(close_am, "cron", hour=12, minute=1, second=0)
+
+    # PM close
+    scheduler.add_job(close_pm, "cron", hour=16, minute=30, second=0)
+
+    scheduler.start()
+    print("Scheduler started...")
+
+
+if __name__ == "__main__":
+    start_scheduler()
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-    except Exception as e:
-        return {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--", "error": f"request_error: {e}"}
-    
-    soup = BeautifulSoup(resp.text, "html.parser")
-    try:
-        tables = soup.find_all("table")
-        table = tables[1]
-        divs = table.find_all("div")
-        live_set = divs[4].get_text(strip=True)
-        live_value = divs[6].get_text(strip=True)
-
-        clean_set = live_set.replace(",", "")
-        formatted = "{:.2f}".format(float(clean_set))
-        top = formatted[-1]
-
-        clean_value = live_value.replace(",", "") or "0.00"
-        last = str(int(float(clean_value)))[-1]
-
-        twod_live = f"{top}{last}"
-        now = datetime.now(tz)
-        return {
-            "date": now.strftime("%Y-%m-%d"),
-            "time": now.strftime("%H:%M:%S"),
-            "set": live_set,
-            "value": live_value,
-            "twod": twod_live
-        }
-    except Exception as e:
-        return {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--", "error": f"parse_error: {e}"}
-
-# -----------------------
-# Fetch & record snapshot
-# -----------------------
-def fetch_snapshot(period):
-    data = scrape_set_live()
-    set_value = data.get("set", "--")
-    value = data.get("value", "--")
-    twod = data.get("twod", "--")
-
-    now = datetime.now(tz)
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M:%S")
-
-    cursor.execute("""
-        INSERT INTO records (record_date, record_time, set_value, value, twod, period)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (date_str, time_str, set_value, value, twod, period))
-    conn.commit()
-    print(f"Recorded {period} snapshot: twod={twod}, set={set_value}, value={value}")
-
-# -----------------------
-# Scheduler
-# -----------------------
-scheduler = BackgroundScheduler(timezone=tz)
-# AM snapshot
-scheduler.add_job(lambda: fetch_snapshot("AM"), 'cron', hour=12, minute=1)
-# PM snapshot
-scheduler.add_job(lambda: fetch_snapshot("PM"), 'cron', hour=16, minute=30)
-scheduler.start()
-
-# -----------------------
-# Routes
-# -----------------------
-@app.get("/")
-def home():
-    live_data = scrape_set_live()
-    result = {
-        "live": live_data,
-        "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
-        "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
-    }
-    return result
-
-@app.get("/latest")
-def latest_day_snapshot():
-    today_str = datetime.now(tz).strftime("%Y-%m-%d")
-    cursor.execute("""
-        SELECT period, record_date, record_time, set_value, value, twod
-        FROM records
-        WHERE record_date = ?
-    """, (today_str,))
-    rows = cursor.fetchall()
-
-    # Initialize AM/PM placeholders
-    result = {
-        "AM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"},
-        "PM": {"date": "--", "time": "--", "set": "--", "value": "--", "twod": "--"}
-    }
-
-    # Update AM/PM if DB records exist
-    for r in rows:
-        period = r[0]
-        result[period] = {
-            "date": r[1],
-            "time": r[2],
-            "set": r[3],
-            "value": r[4],
-            "twod": r[5]
-        }
-
-    # Live scrape
-    result["live"] = scrape_set_live()
-
-    return result
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        scheduler.shutdown()
