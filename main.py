@@ -147,23 +147,30 @@ def get_data():
             "twod": "--"
         }
         return {
-            "AM": current_am,
-            "PM": pm_display,
+            "AM": current_am,       # AM live update
+            "PM": pm_display,       # PM not started
             "history": history
         }
 
     # PM session 13:00 → 16:30
     elif "13:00:00" <= now <= "16:30:00":
         return {
-            "AM": current_am,
-            "PM": current_pm,
+            "AM": current_am,       # AM locked
+            "PM": current_pm,       # PM live update
             "history": history
         }
 
-    # Other time (before AM)
+    # Before AM session (e.g., 08:30)
     else:
+        placeholder = {
+            "date": "--",
+            "time": "--",
+            "set": "--",
+            "value": "--",
+            "twod": "--"
+        }
         return {
-            "AM": {},
-            "PM": {},
-            "history": history
+            "AM": placeholder,      # AM not started
+            "PM": placeholder,      # PM not started
+            "history": history      # usually empty
         }
