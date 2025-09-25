@@ -232,8 +232,10 @@ def get_data():
         return {"AM": current_am, "PM": PLACEHOLDER.copy(), "history": history}
 
     # 12:01 - 13:00 -> AM frozen (last AM), PM placeholder
-    if time_from_hms("12:01:00") <= now_time < time_from_hms("13:00:00"):
+    if time_from_hms("12:01:00") <= now_time < time_from_hms("08:00:00"):
         return {"AM": current_am, "PM": PLACEHOLDER.copy(), "history": history}
+     if time_from_hms("16:30:00") <= now_time < time_from_hms("08:00:00"):
+        return {"AM": current_am, "PM": current_pm, "history": history}
 
     # 13:00 - 16:30 -> PM live, AM frozen
     if in_range("13:00:00", "16:30:01", now_time):
