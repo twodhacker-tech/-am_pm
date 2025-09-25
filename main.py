@@ -135,8 +135,35 @@ def home():
 
 @app.get("/data")
 def get_data():
-    return {
-        "AM": current_am,
-        "PM": current_pm,
-        "history": history
-    }
+    now = datetime.datetime.now(TIMEZONE).strftime("%H:%M:%S")
+
+    # AM session 09:00 → 12:01
+    if "09:00:00" <= now <= "12:01:00":
+        pm_display = {
+            "date": "--",
+            "time": "--",
+            "set": "--",
+            "value": "--",
+            "twod": "--"
+        }
+        return {
+            "AM": current_am,
+            "PM": pm_display,
+            "history": history
+        }
+
+    # PM session 13:00 → 16:30
+    elif "13:00:00" <= now <= "16:30:00":
+        return {
+            "AM": current_am,
+            "PM": current_pm,
+            "history": history
+        }
+
+    # Other time (before AM)
+    else:
+        return {
+            "AM": {},
+            "PM": {},
+            "history": history
+        }
