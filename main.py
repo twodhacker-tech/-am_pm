@@ -120,13 +120,13 @@ def runner():
                 last_reset_date = today_str
                 print(f"[{now_dt.strftime('%H:%M:%S')}] Reset placeholders")
 
-        # AM run 09:00-12:01:30
-        if in_range("09:00:00", "12:01:30", now_time):
+        # AM run 09:00-12:01:15
+        if in_range("09:00:00", "12:01:15", now_time):
             current_am = get_live()
             current_pm = PLACEHOLDER.copy()
 
-        # Save AM after 12:01:30 once
-        if now_time >= time_from_hms("12:01:30") and last_am_saved_date != today_str:
+        # Save AM after 12:01:15 once
+        if now_time >= time_from_hms("12:01:15") and last_am_saved_date != today_str:
             if current_am.get("date") != "--":
                 history.append({"session": "AM", **current_am})
                 save_history()
